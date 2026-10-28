@@ -30,6 +30,7 @@ export type Opts = {
     autoVoiceMute?: boolean;
     hideMemberList?: boolean;
     hideMentions?: boolean;
+    hideDMRow?: boolean;
 };
 
 export const OPT_KEYS = [
@@ -39,6 +40,7 @@ export const OPT_KEYS = [
     "autoVoiceMute",
     "hideMemberList",
     "hideMentions",
+    "hideDMRow",
 ] as const;
 
 type Store = {
@@ -68,8 +70,9 @@ export function initStorage() {
         autoVoiceMute: true,
         hideMemberList: true,
         hideMentions: true,
+        hideDMRow: false,
     };
-    for (const key of OPT_KEYS) store.defaults[key] ??= true;
+    for (const key of OPT_KEYS) store.defaults[key] ??= key !== "hideDMRow";
 
     // Anyone hidden while servers and DMs were off by default, and never touched
     // since, is brought up to the new meaning of "hidden". A record that was
