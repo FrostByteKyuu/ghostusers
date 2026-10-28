@@ -11,6 +11,7 @@ import { showToast } from "@vendetta/ui/toasts";
 import { diag, hideUser, OPT_KEYS, showUser, store, UserStore } from "./core";
 import { CHANGELOG, VERSION } from "./changelog";
 import { applyMute } from "./mute";
+import { refreshDMList } from "./dmlist";
 
 const { FormSection, FormRow, FormSwitchRow, FormInput, FormDivider, FormText } = Forms;
 const { ScrollView, View } = General;
@@ -22,6 +23,7 @@ const LABELS: Record<string, [string, string]> = {
     autoVoiceMute: ["Mute in calls", "Silence them for you when they are in a call"],
     hideMemberList: ["Member lists", "Take them out of member lists and counts"],
     hideMentions: ["Tags & replies", "Also hide messages that tag or reply to them"],
+    hideDMRow: ["Hide from DM list", "Remove your one-on-one chat with them from the DM list"],
 };
 
 const el = React.createElement;
@@ -96,6 +98,7 @@ export default function Settings() {
                             onValueChange: (v: boolean) => {
                                 store.users = { ...store.users, [id]: { ...rec, [key]: v } };
                                 if (key === "autoVoiceMute") applyMute(id, v);
+                                if (key === "hideDMRow") refreshDMList();
                             },
                         }),
                     ),
