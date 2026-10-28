@@ -50,22 +50,38 @@ function targetIds(): string[] {
     return out;
 }
 
-/** Ask the app to redraw the DM list. Asked twice, because one ask is sometimes
-    not picked up until later. */
+/** Stores that could be sitting between the list's data and the screen. The one
+    that actually redraws the DM tab is not known, so all of them are nudged. */
+const NUDGE = [
+    "PrivateChannelSortStore",
+    "ChannelStore",
+    "PrivateChannelReadStateStore",
+    "ConversationsStore",
+    "ConversationVisibilityStore",
+];
+
+/** Ask the app to redraw the DM list. Asked three times, because one ask is
+    sometimes not picked up until much later. */
 export function refreshDMList() {
     generation++;
     const emit = () => {
-        for (const name of ["PrivateChannelSortStore", "ChannelStore"]) {
+        const done: string[] = [];
+        for (const name of NUDGE) {
             try {
                 const s: any = findByStoreName(name);
-                s?.emitChange?.();
+                if (s && typeof s.emitChange === "function") {
+                    s.emitChange();
+                    done.push(name);
+                }
             } catch (e) {
                 console.log("[GhostUsers] refreshDMList", e);
             }
         }
+        diag.patches["dmRefresh"] = `ok · last nudge reached ${done.length} of ${NUDGE.length}: ${done.join(", ") || "none"}`;
     };
     emit();
     setTimeout(emit, 400);
+    setTimeout(emit, 2000);
 }
 
 /* ---- the two places the list comes from ---- */
