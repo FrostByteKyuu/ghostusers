@@ -1,24 +1,20 @@
 // Takes the one-on-one chat with chosen hidden people out of the Direct Messages
-// list. It is a per-person switch ("Hide from DM list") and it is off until you turn
-// it on for someone. Only 1:1 DMs are touched; group DMs are left alone.
+// list. It is a per-person switch ("Hide from DM list"), off until you turn it on
+// for someone. Only 1:1 DMs are touched; group DMs are left alone.
 //
-// THIS VERSION ALSO REPORTS WHAT IT SEES: the About section in settings now lists
-// which store methods the app really calls, how often, and what they return. That is
-// how the right one gets found. It is temporary and comes out once the row hides.
+// THIS VERSION HUNTS FOR THE REAL SOURCE OF THE LIST. It looks up the DM channel of
+// each person with the switch on, then watches the channel-related stores: any list
+// (or id-keyed object) that contains that channel gets it taken out, and About in
+// settings reports which method it was. Temporary: once the row hides, it gets
+// narrowed down to the one method that matters.
 
 import { after } from "@vendetta/patcher";
+import * as metro from "@vendetta/metro";
 import { findByStoreName } from "@vendetta/metro";
-import { anyHidden, diag, isHidden, mark, onHiddenSetChanged, opt } from "./core";
+import { diag, mark, onHiddenSetChanged, opt, store } from "./core";
 
-const userIdOf = (x: any): string | undefined => (typeof x === "string" ? x : x?.id);
 const channelIdOf = (x: any): string | undefined =>
     typeof x === "string" ? x : x?.channelId ?? x?.id;
-
-const CANDIDATES: [string, string][] = [
-    ["PrivateChannelSortStore", "getPrivateChannelIds"],
-    ["PrivateChannelSortStore", "getSortedChannels"],
-    ["ChannelStore", "getSortedPrivateChannels"],
-];
 
 const shapeOf = (v: any): string =>
     Array.isArray(v)
@@ -42,8 +38,42 @@ function methodNames(obj: any): string[] {
     return names;
 }
 
+/* ---- which DM channels are we hiding? ---- */
+
+let generation = 0;
+let cacheGen = -1;
+let cache: string[] = [];
+
+function targetIds(): string[] {
+    if (cacheGen === generation) return cache;
+    const CS: any = findByStoreName("ChannelStore");
+    const out: string[] = [];
+    let users = 0;
+    for (const uid of Object.keys(store.users ?? {})) {
+        if (!opt(uid, "hideDMRow")) continue;
+        users++;
+        try {
+            const r = CS?.getDMFromUserId?.(uid) ?? CS?.getDMChannelFromUserId?.(uid);
+            const id = typeof r === "string" ? r : r?.id;
+            if (id) {
+                out.push(id);
+                continue;
+            }
+            // fallback: look through the private channels for a 1:1 with this person
+            const all = CS?.getMutablePrivateChannels?.() ?? {};
+            for (const ch of Object.values<any>(all))
+                if (ch?.type === 1 && Array.isArray(ch.recipients) && ch.recipients.includes(uid)) out.push(ch.id);
+        } catch { /* nothing to do */ }
+    }
+    cache = out;
+    cacheGen = generation;
+    diag.patches["dmTargets"] = `ok · ${users} person(s) with the switch on · ${out.length} DM channel(s) found`;
+    return out;
+}
+
 /** Ask the DM list to redraw, e.g. right after the switch is flipped. */
 export function refreshDMList() {
+    generation++;
     try {
         const s: any = findByStoreName("PrivateChannelSortStore") ?? findByStoreName("ChannelStore");
         s?.emitChange?.();
@@ -52,102 +82,122 @@ export function refreshDMList() {
     }
 }
 
-export function patchDMList(patches: (() => void)[]) {
-    const ChannelStore: any = findByStoreName("ChannelStore");
-    let sampled = false;
+/* ---- finding the stores ---- */
 
-    /** Is this list entry (an id, or an object carrying one) a 1:1 DM with someone
-        who is hidden AND has the DM-list switch on? */
-    const isHiddenDM = (entry: any): boolean => {
-        try {
-            const id = channelIdOf(entry);
-            if (!id) return false;
-            const ch = ChannelStore?.getChannel?.(id);
-            if (!ch || ch.type !== 1) return false;
-            const people = ch.recipients ?? ch.rawRecipients ?? ch.recipientIds;
-            if (!sampled) {
-                sampled = true;
-                diag.patches["dmSample"] = `ok · first 1:1 DM: recipients=${shapeOf(people)}`
-                    + ` · rawRecipients=${shapeOf(ch.rawRecipients)} · recipientIds=${shapeOf(ch.recipientIds)}`;
-            }
-            if (!Array.isArray(people)) return false;
-            return people.some((r: any) => {
-                const uid = userIdOf(r);
-                return !!uid && isHidden(uid) && opt(uid, "hideDMRow");
-            });
-        } catch {
-            return false;
+const STORE_NAME = /channel|private|dm|recent|sort|inbox|conversation|list|read|nav|home|tab|unread|mention|ack/i;
+const METHOD_NAME = /^(get|is|has|list|find)/;
+const SKIP = new Set([
+    "getName", "getDispatchToken", "getChannel", "getDMFromUserId",
+    "getDMChannelFromUserId", "getMutableDMSByUserIds", "getDMUserIds",
+]);
+
+function allStores(): { stores: any[]; route: string } {
+    try {
+        const CS: any = findByStoreName("ChannelStore");
+        const getAll = CS?.constructor?.getAll;
+        if (typeof getAll === "function") {
+            const list = getAll.call(CS.constructor);
+            if (Array.isArray(list) && list.length) return { stores: list, route: "getAll" };
         }
-    };
-
-    let attached = 0;
-    for (const [storeName, method] of CANDIDATES) {
-        const target: any = findByStoreName(storeName);
-        if (!target || typeof target[method] !== "function") continue;
-
-        const key = `dmList.${method}`;
-        let last: any[] | null = null;
-        let calls = 0;
-
-        patches.push(
-            after(method, target, (_args: any[], ret: any) => {
+    } catch { /* try the next route */ }
+    try {
+        const findAll = (metro as any).findAll;
+        if (typeof findAll === "function") {
+            const list = findAll((m: any) => {
                 try {
-                    calls++;
-                    if (!Array.isArray(ret)) {
-                        diag.patches[key] = `ok · calls ${calls} · returns ${shapeOf(ret)}`;
-                        return ret;
-                    }
-                    const kept = anyHidden() ? ret.filter((e: any) => !isHiddenDM(e)) : ret;
-                    diag.patches[key] =
-                        `ok · calls ${calls} · ${shapeOf(ret)} · removed ${ret.length - kept.length}`;
-                    if (kept.length === ret.length) return ret;
-
-                    // Same contents as last time -> same array. The app reads this
-                    // constantly, and a fresh array every call can make it redraw
-                    // forever.
-                    if (last && last.length === kept.length && last.every((x, i) => x === kept[i])) return last;
-                    last = kept;
-                    return kept;
-                } catch (e) {
-                    console.log(`[GhostUsers] ${key}`, e);
-                    return ret;
+                    return typeof m?.getName === "function" && typeof m?.emitChange === "function";
+                } catch {
+                    return false;
                 }
-            }),
-        );
-        mark(key, true);
-        diag.patches[key] = "ok · attached, not called yet";
-        attached++;
-    }
+            });
+            if (Array.isArray(list) && list.length) return { stores: list, route: "findAll" };
+        }
+    } catch { /* try the next route */ }
+    const named = ["PrivateChannelSortStore", "ChannelStore"].map(n => findByStoreName(n)).filter(Boolean);
+    return { stores: named, route: "named only" };
+}
 
-    if (!attached) mark("dmList", false, "no DM list reader found");
+let scanning = false;
 
-    /* ---- the probe: what do these stores have, and which of it does the app use? ---- */
-    const PROBE = /private|sorted|dm|recent/i;
-    for (const name of ["PrivateChannelSortStore", "ChannelStore"]) {
+export function patchDMList(patches: (() => void)[]) {
+    const stable: Record<string, any> = {};
+
+    // computed once up front so About shows whether the lookup worked
+    targetIds();
+    onHiddenSetChanged(refreshDMList);
+
+    const { stores, route } = allStores();
+    const patched: string[] = [];
+    let methods = 0;
+
+    for (const s of stores) {
+        let name = "";
         try {
-            const s: any = findByStoreName(name);
-            if (!s) {
-                diag.patches[`dmProbe.${name}`] = "ok · store not found";
-                continue;
-            }
-            const names = methodNames(s).filter(n => PROBE.test(n));
-            diag.patches[`dmProbe.${name}`] = `ok · ${names.join(", ") || "none"}`;
-            for (const n of names) {
-                if (CANDIDATES.some(([sn, m]) => sn === name && m === n)) continue;
-                let calls = 0;
+            name = String(s.getName());
+        } catch {
+            continue;
+        }
+        if (!STORE_NAME.test(name)) continue;
+
+        let any = false;
+        for (const n of methodNames(s)) {
+            if (!METHOD_NAME.test(n) || SKIP.has(n)) continue;
+            const hitKey = `dmHit.${name}.${n}`;
+            let calls = 0;
+            let hits = 0;
+            try {
                 patches.push(
                     after(n, s, (_args: any[], ret: any) => {
                         calls++;
-                        diag.patches[`dmSpy.${name}.${n}`] = `ok · calls ${calls} · ${shapeOf(ret)}`;
-                        return ret;
+                        if (scanning || !ret || typeof ret !== "object") return ret;
+                        scanning = true;
+                        try {
+                            const ids = targetIds();
+                            if (!ids.length) return ret;
+
+                            if (Array.isArray(ret)) {
+                                const kept = ret.filter((e: any) => !ids.includes(channelIdOf(e) as string));
+                                if (kept.length === ret.length) return ret;
+                                hits++;
+                                diag.patches[hitKey] = `ok · HIT · calls ${calls} · hits ${hits} · ${shapeOf(ret)} · hidden from it`;
+                                // same contents as last time -> same array, so nothing redraws forever
+                                const last = stable[hitKey];
+                                if (last && last.length === kept.length && last.every((x: any, i: number) => x === kept[i])) return last;
+                                stable[hitKey] = kept;
+                                return kept;
+                            }
+
+                            const proto = Object.getPrototypeOf(ret);
+                            if ((proto === Object.prototype || proto === null) && ids.some(id => id in ret)) {
+                                hits++;
+                                const filtered = /private|dm|sorted|recent/i.test(n);
+                                diag.patches[hitKey] = `ok · HIT · calls ${calls} · hits ${hits} · ${shapeOf(ret)}`
+                                    + (filtered ? " · hidden from it" : " · seen only");
+                                if (!filtered) return ret;
+                                const size = Object.keys(ret).length;
+                                const last = stable[hitKey];
+                                if (last && last.from === ret && last.gen === generation && last.size === size) return last.copy;
+                                const copy: any = {};
+                                for (const k of Object.keys(ret)) if (!ids.includes(k)) copy[k] = ret[k];
+                                stable[hitKey] = { from: ret, gen: generation, size, copy };
+                                return copy;
+                            }
+                            return ret;
+                        } catch (e) {
+                            console.log(`[GhostUsers] ${hitKey}`, e);
+                            return ret;
+                        } finally {
+                            scanning = false;
+                        }
                     }),
                 );
-            }
-        } catch (e) {
-            console.log(`[GhostUsers] probe ${name}`, e);
+                methods++;
+                any = true;
+            } catch { /* this one cannot be patched; carry on */ }
         }
+        if (any) patched.push(name);
     }
 
-    // hiding or un-hiding someone changes what the list should show
-    onHiddenSetChanged(refreshDMList);
+    diag.patches["dmScan"] = `ok · route ${route} · ${methods} methods on ${patched.length} stores: ${patched.join(", ")}`;
+    mark("dmList", methods > 0, "could not watch any store");
 }
