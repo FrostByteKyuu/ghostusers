@@ -9,6 +9,7 @@ import { clearLookupState } from "./reactions";
 import { reconnoitre } from "./discover";
 import { startSonar } from "./sonar";
 import Settings from "./Settings";
+import { patchDMList } from "./dmlist";
 
 let patches: (() => void)[] = [];
 
@@ -21,6 +22,7 @@ export const onLoad = () => {
     patchDispatcher(patches);
     patchMessages(patches);
     patchStores(patches);
+    patchDMList(patches);
     patchUserSheet(patches);
     setUpMute();
 
