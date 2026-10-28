@@ -118,10 +118,68 @@ function allStores(): { stores: any[]; route: string } {
 }
 
 let scanning = false;
+const stable: Record<string, any> = {};
+
+/** One watcher per store method. It has to be its own function: a callback made
+    inside a loop was handed the wrong variables on this engine (the label came out
+    as "undefined" and the counters as NaN), so everything it needs is passed in. */
+function watch(patches: (() => void)[], s: any, storeName: string, method: string): boolean {
+    const hitKey = `dmHit.${storeName}.${method}`;
+    const hideObjects = /private|dm|sorted|recent|conversation|list/i.test(`${storeName}.${method}`);
+    let calls = 0;
+    let hits = 0;
+    try {
+        patches.push(
+            after(method, s, (_args: any[], ret: any) => {
+                calls++;
+                if (scanning || !ret || typeof ret !== "object") return ret;
+                scanning = true;
+                try {
+                    const ids = targetIds();
+                    if (!ids.length) return ret;
+
+                    if (Array.isArray(ret)) {
+                        const kept = ret.filter((e: any) => !ids.includes(channelIdOf(e) as string));
+                        if (kept.length === ret.length) return ret;
+                        hits++;
+                        diag.patches[hitKey] = `ok · HIT · calls ${calls} · hits ${hits} · ${shapeOf(ret)} · hidden from it`;
+                        // same contents as last time -> same array, so nothing redraws forever
+                        const last = stable[hitKey];
+                        if (last && last.length === kept.length && last.every((x: any, i: number) => x === kept[i])) return last;
+                        stable[hitKey] = kept;
+                        return kept;
+                    }
+
+                    const proto = Object.getPrototypeOf(ret);
+                    if ((proto === Object.prototype || proto === null) && ids.some((id: string) => id in ret)) {
+                        hits++;
+                        diag.patches[hitKey] = `ok · HIT · calls ${calls} · hits ${hits} · ${shapeOf(ret)}`
+                            + (hideObjects ? " · hidden from it" : " · seen only");
+                        if (!hideObjects) return ret;
+                        const size = Object.keys(ret).length;
+                        const last = stable[hitKey];
+                        if (last && last.from === ret && last.gen === generation && last.size === size) return last.copy;
+                        const copy: any = {};
+                        for (const k of Object.keys(ret)) if (!ids.includes(k)) copy[k] = ret[k];
+                        stable[hitKey] = { from: ret, gen: generation, size, copy };
+                        return copy;
+                    }
+                    return ret;
+                } catch (e) {
+                    console.log(`[GhostUsers] ${hitKey}`, e);
+                    return ret;
+                } finally {
+                    scanning = false;
+                }
+            }),
+        );
+        return true;
+    } catch {
+        return false; // this one cannot be patched; carry on
+    }
+}
 
 export function patchDMList(patches: (() => void)[]) {
-    const stable: Record<string, any> = {};
-
     // computed once up front so About shows whether the lookup worked
     targetIds();
     onHiddenSetChanged(refreshDMList);
@@ -131,71 +189,23 @@ export function patchDMList(patches: (() => void)[]) {
     let methods = 0;
 
     for (const s of stores) {
-        let name = "";
+        let storeName = "";
         try {
-            name = String(s.getName());
+            storeName = String(s.getName());
         } catch {
             continue;
         }
-        if (!STORE_NAME.test(name)) continue;
+        if (!STORE_NAME.test(storeName)) continue;
 
         let any = false;
-        for (const n of methodNames(s)) {
-            if (!METHOD_NAME.test(n) || SKIP.has(n)) continue;
-            const hitKey = `dmHit.${name}.${n}`;
-            let calls = 0;
-            let hits = 0;
-            try {
-                patches.push(
-                    after(n, s, (_args: any[], ret: any) => {
-                        calls++;
-                        if (scanning || !ret || typeof ret !== "object") return ret;
-                        scanning = true;
-                        try {
-                            const ids = targetIds();
-                            if (!ids.length) return ret;
-
-                            if (Array.isArray(ret)) {
-                                const kept = ret.filter((e: any) => !ids.includes(channelIdOf(e) as string));
-                                if (kept.length === ret.length) return ret;
-                                hits++;
-                                diag.patches[hitKey] = `ok · HIT · calls ${calls} · hits ${hits} · ${shapeOf(ret)} · hidden from it`;
-                                // same contents as last time -> same array, so nothing redraws forever
-                                const last = stable[hitKey];
-                                if (last && last.length === kept.length && last.every((x: any, i: number) => x === kept[i])) return last;
-                                stable[hitKey] = kept;
-                                return kept;
-                            }
-
-                            const proto = Object.getPrototypeOf(ret);
-                            if ((proto === Object.prototype || proto === null) && ids.some(id => id in ret)) {
-                                hits++;
-                                const filtered = /private|dm|sorted|recent/i.test(n);
-                                diag.patches[hitKey] = `ok · HIT · calls ${calls} · hits ${hits} · ${shapeOf(ret)}`
-                                    + (filtered ? " · hidden from it" : " · seen only");
-                                if (!filtered) return ret;
-                                const size = Object.keys(ret).length;
-                                const last = stable[hitKey];
-                                if (last && last.from === ret && last.gen === generation && last.size === size) return last.copy;
-                                const copy: any = {};
-                                for (const k of Object.keys(ret)) if (!ids.includes(k)) copy[k] = ret[k];
-                                stable[hitKey] = { from: ret, gen: generation, size, copy };
-                                return copy;
-                            }
-                            return ret;
-                        } catch (e) {
-                            console.log(`[GhostUsers] ${hitKey}`, e);
-                            return ret;
-                        } finally {
-                            scanning = false;
-                        }
-                    }),
-                );
+        for (const method of methodNames(s)) {
+            if (!METHOD_NAME.test(method) || SKIP.has(method)) continue;
+            if (watch(patches, s, storeName, method)) {
                 methods++;
                 any = true;
-            } catch { /* this one cannot be patched; carry on */ }
+            }
         }
-        if (any) patched.push(name);
+        if (any) patched.push(storeName);
     }
 
     diag.patches["dmScan"] = `ok · route ${route} · ${methods} methods on ${patched.length} stores: ${patched.join(", ")}`;
