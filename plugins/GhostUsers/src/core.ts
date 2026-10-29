@@ -31,6 +31,7 @@ export type Opts = {
     hideMemberList?: boolean;
     hideMentions?: boolean;
     hideDMRow?: boolean;
+    hideAvatar?: boolean;
 };
 
 export const OPT_KEYS = [
@@ -41,6 +42,7 @@ export const OPT_KEYS = [
     "hideMemberList",
     "hideMentions",
     "hideDMRow",
+    "hideAvatar",
 ] as const;
 
 type Store = {
@@ -71,6 +73,7 @@ export function initStorage() {
         hideMemberList: true,
         hideMentions: true,
         hideDMRow: false,
+        hideAvatar: true,
     };
     for (const key of OPT_KEYS) store.defaults[key] ??= key !== "hideDMRow";
 
