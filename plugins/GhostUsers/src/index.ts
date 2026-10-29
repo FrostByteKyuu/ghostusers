@@ -10,6 +10,7 @@ import { reconnoitre } from "./discover";
 import { startSonar } from "./sonar";
 import Settings from "./Settings";
 import { patchDMList } from "./dmlist";
+import { patchAvatars } from "./avatars";
 
 let patches: (() => void)[] = [];
 
@@ -23,6 +24,7 @@ export const onLoad = () => {
     patchMessages(patches);
     patchStores(patches);
     patchDMList(patches);
+    patchAvatars(patches);
     patchUserSheet(patches);
     setUpMute();
 
