@@ -12,6 +12,7 @@ import { diag, hideUser, OPT_KEYS, showUser, store, UserStore } from "./core";
 import { CHANGELOG, VERSION } from "./changelog";
 import { applyMute } from "./mute";
 import { refreshDMList } from "./dmlist";
+import { refreshAvatars } from "./avatars";
 
 const { FormSection, FormRow, FormSwitchRow, FormInput, FormDivider, FormText } = Forms;
 const { ScrollView, View } = General;
@@ -24,6 +25,7 @@ const LABELS: Record<string, [string, string]> = {
     hideMemberList: ["Member lists", "Take them out of member lists and counts"],
     hideMentions: ["Tags & replies", "Also hide messages that tag or reply to them"],
     hideDMRow: ["Hide from DM list", "Remove your one-on-one chat with them from the DM list"],
+    hideAvatar: ["Hide profile picture", "Show the plain default picture instead of theirs"],
 };
 
 const el = React.createElement;
@@ -83,7 +85,7 @@ export default function Settings() {
             el(FormRow, {
                 label: name,
                 subLabel: expanded ? id : `${on} of ${OPT_KEYS.length} switches on`,
-                leading: el(Avatar, { id }),
+                leading: (rec.hideAvatar ?? store.defaults.hideAvatar) ? el(FormRow.Icon, { source: getAssetIDByName("ic_person") }) : el(Avatar, { id }),
                 trailing: el(FormRow.Arrow, null),
                 onPress: () => setOpen(expanded ? null : id),
             }),
@@ -92,13 +94,14 @@ export default function Settings() {
                     ...OPT_KEYS.map(key =>
                         el(FormSwitchRow, {
                             key: `${id}-${key}`,
-                            label: LABELS[key][0],
-                            subLabel: LABELS[key][1],
+                            label: [key][0],
+                            subLabel: [key][1],
                             value: rec[key] ?? store.defaults[key],
                             onValueChange: (v: boolean) => {
                                 store.users = { ...store.users, [id]: { ...rec, [key]: v } };
                                 if (key === "autoVoiceMute") applyMute(id, v);
                                 if (key === "hideDMRow") refreshDMList();
+                                if (key === "hideAvatar") refreshAvatars();
                             },
                         }),
                     ),
@@ -161,8 +164,8 @@ export default function Settings() {
             ...OPT_KEYS.map(key =>
                 el(FormSwitchRow, {
                     key: `def-${key}`,
-                    label: LABELS[key][0],
-                    subLabel: LABELS[key][1],
+                    label: [key][0],
+                    subLabel: [key][1],
                     value: store.defaults[key],
                     onValueChange: (v: boolean) => {
                         store.defaults = { ...store.defaults, [key]: v };
