@@ -6,7 +6,7 @@
 
 import { after } from "@vendetta/patcher";
 import { findByStoreName } from "@vendetta/metro";
-import { anyHidden, diag, isHiddenIn, isHidden, mark, onHiddenSetChanged, opt, SelectedChannelStore, store } from "./core";
+import { anyHidden, hiddenAnywhere, diag, isHiddenIn, isHidden, mark, onHiddenSetChanged, opt, SelectedChannelStore, store } from "./core";
 import { learnReactors, emojiKey } from "./reactions";
 
 const idOf = (x: any): string | undefined =>
@@ -321,6 +321,6 @@ export function patchStores(patches: (() => void)[]) {
     }, "voiceCount");
 
     on("VoiceStateStore", "getVoiceState", ([a, b], ret) =>
-        ret && isHidden(idOf(ret)) ? null : ret,
+        ret && hiddenAnywhere(idOf(ret)) ? null : ret,
         "voiceState");
 }
