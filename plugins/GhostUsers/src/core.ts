@@ -94,6 +94,7 @@ export function initStorage() {
 export const anyHidden = () => Object.keys(store.users ?? {}).length > 0;
 
 export const isHidden = (id?: string | null) => !!id && !!store.users?.[id];
+export const hiddenAnywhere = (id?: string | null) => !!id && !!store.users?.[id] && (opt(id, "scopeGroups") || opt(id, "scopeServers") || opt(id, "scopeDMs"));
 
 export function opt(id: string, key: (typeof OPT_KEYS)[number]): boolean {
     const rec = store.users?.[id];
